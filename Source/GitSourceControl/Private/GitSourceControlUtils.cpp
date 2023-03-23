@@ -515,7 +515,13 @@ void GetUserConfig(const FString& InPathToGitBinary, const FString& InRepository
 
 bool GetBranchName(const FString& InPathToGitBinary, const FString& InRepositoryRoot, FString& OutBranchName)
 {
-	const FGitSourceControlProvider& Provider = FGitSourceControlModule::Get().GetProvider();
+    auto * git_module = FModuleManager::Get().LoadModulePtr< FGitSourceControlModule >( "GitSourceControl" );
+	if ( git_module == nullptr )
+	{
+        return false;
+	}
+
+    const FGitSourceControlProvider & Provider = git_module->GetProvider();
 	if (!Provider.GetBranchName().IsEmpty())
 	{
 		OutBranchName = Provider.GetBranchName();
@@ -653,15 +659,9 @@ bool RunCommand(const FString& InCommand, const FString& InPathToGitBinary, cons
 	return bResult;
 }
 
-#ifndef GIT_USE_CUSTOM_LFS
-#define GIT_USE_CUSTOM_LFS 1
-#endif
-
-bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InParameters, const TArray<FString>& InFiles,
+bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, const TArray<FString>& InParameters, const TArray<FString>& InFiles,
 				   TArray<FString>& OutResults, TArray<FString>& OutErrorMessages)
 {
-	FString Command = InCommand;
-#if GIT_USE_CUSTOM_LFS
 	FString BaseDir = IPluginManager::Get().FindPlugin("GitSourceControl")->GetBaseDir();
 #if PLATFORM_WINDOWS
 	FString LFSLockBinary = FString::Printf(TEXT("%s/git-lfs.exe"), *BaseDir);
@@ -678,16 +678,10 @@ bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, co
 #elif PLATFORM_LINUX
 	FString LFSLockBinary = FString::Printf(TEXT("%s/git-lfs"), *BaseDir);
 #else
-	ensureMsgf(false, TEXT("Unhandled platform for LFS binary!"));
-	const FString& LFSLockBinary = GitBinaryFallback;
-	Command = TEXT("lfs ") + Command;
-#endif
-#else
-	const FString& LFSLockBinary = GitBinaryFallback;
-	Command = TEXT("lfs ") + Command;
+	checkf(false, TEXT("Unhandled platform for LFS binary!"));
 #endif
 
-	return GitSourceControlUtils::RunCommand(Command, LFSLockBinary, InRepositoryRoot, InParameters, InFiles, OutResults, OutErrorMessages);
+	return GitSourceControlUtils::RunCommand(InCommand, LFSLockBinary, InRepositoryRoot, InParameters, InFiles, OutResults, OutErrorMessages);
 }
 
 // Run a Git "commit" command by batches
@@ -1149,7 +1143,7 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 				{
 					bCheckedLockedFiles = true;
 					TArray<FString> ErrorMessages;
-					GetAllLocks(InRepositoryRoot, InPathToGitBinary, ErrorMessages, LockedFiles);
+					GetAllLocks(InRepositoryRoot, ErrorMessages, LockedFiles);
 					FMessageLog SourceControlLog("SourceControl");
 					for (int32 ErrorIndex = 0; ErrorIndex < ErrorMessages.Num(); ++ErrorIndex)
 					{
@@ -1326,7 +1320,7 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 
 const FTimespan CacheLimit = FTimespan::FromSeconds(30);
 
-bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache)
+bool GetAllLocks(const FString& InRepositoryRoot, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache)
 {
 	// You may ask, why are we ignoring state cache, and instead maintaining our own lock cache?
 	// The answer is that state cache updating is another operation, and those that update status
@@ -1349,7 +1343,7 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 		// Our cache expired, or they asked us to expire cache. Query locks directly from the remote server.
 		TArray<FString> ErrorMessages;
 		TArray<FString> Results;
-		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
+		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
 								Results, OutErrorMessages);
 		if (bResult)
 		{
@@ -1373,7 +1367,7 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 		const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 
 		Results.Reset();
-		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
+		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
 		for (const FString& Result : Results)
 		{
 			FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
@@ -1391,7 +1385,7 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 		Params.Add(TEXT("--local"));
 
 		Results.Reset();
-		bResult &= RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
+		bResult &= RunLFSCommand(TEXT("locks"), InRepositoryRoot, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
 		for (const FString& Result : Results)
 		{
 			FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
@@ -2067,7 +2061,7 @@ bool FetchRemote(const FString& InPathToGitBinary, const FString& InPathToReposi
 	if (InUsingGitLfsLocking)
 	{
 		TMap<FString, FString> Locks;
-		GetAllLocks(InPathToRepositoryRoot, InPathToGitBinary, OutErrorMessages, Locks, true);
+		GetAllLocks(InPathToRepositoryRoot, OutErrorMessages, Locks, true);
 	}
 	TArray<FString> Params{"--no-tags"};
 	// fetch latest repo
@@ -2169,6 +2163,43 @@ bool PullOrigin(const FString& InPathToGitBinary, const FString& InPathToReposit
 	return bSuccess;
 }
 
+TSharedPtr<ISourceControlRevision, ESPMode::ThreadSafe> GetOriginDevelopRevision( const FString & InPathToGitBinary, const FString & InRepositoryRoot, const FString & InRelativeFileName, TArray<FString> & OutErrorMessages )
+{
+    TGitSourceControlHistory OutHistory;
+
+    TArray< FString > Results;
+    TArray< FString > Parameters;
+    Parameters.Add( TEXT( "origin/develop" ) );
+    Parameters.Add( TEXT( "--date=raw" ) );
+    Parameters.Add( TEXT( "--pretty=medium" ) ); // make sure format matches expected in ParseLogResults
+
+    TArray< FString > Files;
+    const auto bResults = RunCommand( TEXT( "show" ), InPathToGitBinary, InRepositoryRoot, Parameters, Files, Results, OutErrorMessages );
+
+    if ( bResults )
+    {
+        ParseLogResults( Results, OutHistory );
+    }
+
+    if ( OutHistory.Num() > 0 )
+    {
+        auto AbsoluteFileName = FPaths::ConvertRelativePathToFull( InRelativeFileName );
+
+        AbsoluteFileName.RemoveFromStart( InRepositoryRoot );
+
+		if ( AbsoluteFileName[ 0 ] == '/' )
+		{
+            AbsoluteFileName.RemoveAt( 0 );    
+		}
+        
+
+        OutHistory[ 0 ]->Filename = AbsoluteFileName;
+
+        return OutHistory[ 0 ];
+    }
+
+    return nullptr;
+}
 } // namespace GitSourceControlUtils
 
 #undef LOCTEXT_NAMESPACE
