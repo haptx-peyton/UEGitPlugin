@@ -2169,7 +2169,8 @@ TSharedPtr<ISourceControlRevision, ESPMode::ThreadSafe> GetOriginDevelopRevision
 
     TArray< FString > Results;
     TArray< FString > Parameters;
-    Parameters.Add( TEXT( "origin/develop" ) );
+	// TODO: Replace with a check for status branches instead of hard-coding the value!
+    Parameters.Add( TEXT( "origin/main" ) );
     Parameters.Add( TEXT( "--date=raw" ) );
     Parameters.Add( TEXT( "--pretty=medium" ) ); // make sure format matches expected in ParseLogResults
 

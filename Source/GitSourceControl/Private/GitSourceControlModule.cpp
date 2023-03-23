@@ -57,6 +57,7 @@ void FGitSourceControlModule::StartupModule()
 	// Bind our source control provider to the editor
 	IModularFeatures::Get().RegisterModularFeature( "SourceControl", &GitSourceControlProvider );
 
+    FContentBrowserModule& ContentBrowserModule = FModuleManager::Get().LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
 #if ENGINE_MAJOR_VERSION >= 5
 	// Register ContentBrowserDelegate Handles for UE5 EA
 	// At the time of writing this UE5 is in Early Access and has no support for source control yet. So instead we hook into the contentbrowser..
@@ -64,16 +65,20 @@ void FGitSourceControlModule::StartupModule()
 	// Values here are 1 or 2 based on whether the change can be done immediately or needs to be delayed as unreal needs to work through its internal delegates first
 	// >> Technically you wouldn't need to use `GetOnAssetSelectionChanged` -- but it's there as a safety mechanism. States aren't forceupdated for the first path that loads
 	// >> Making sure we force an update on selection change that acts like a just in case other measures fail
-	FContentBrowserModule& ContentBrowserModule = FModuleManager::Get().LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
 	CbdHandle_OnFilterChanged = ContentBrowserModule.GetOnFilterChanged().AddLambda( [this]( const FARFilter&, bool ) { GitSourceControlProvider.TicksUntilNextForcedUpdate = 2; } );
 	CbdHandle_OnSearchBoxChanged = ContentBrowserModule.GetOnSearchBoxChanged().AddLambda( [this]( const FText&, bool ){ GitSourceControlProvider.TicksUntilNextForcedUpdate = 1; } );
 	CbdHandle_OnAssetSelectionChanged = ContentBrowserModule.GetOnAssetSelectionChanged().AddLambda( [this]( const TArray<FAssetData>&, bool ) { GitSourceControlProvider.TicksUntilNextForcedUpdate = 1; } );
 	CbdHandle_OnAssetPathChanged = ContentBrowserModule.GetOnAssetPathChanged().AddLambda( [this]( const FString& ) { GitSourceControlProvider.TicksUntilNextForcedUpdate = 2; } );
+#endif
 
+    // Register the "Diff with Origin" menu option as an extension of the existing context menus.
     auto  & extenders = ContentBrowserModule.GetAllAssetViewContextMenuExtenders();
     extenders.Add( FContentBrowserMenuExtender_SelectedAssets::CreateRaw( this, &FGitSourceControlModule::OnExtendContentBrowserAssetSelectionMenu ) );
+
+#if ENGINE_MAJOR_VERSION >= 5
     ContentBrowserAssetExtenderDelegateHandle = extenders.Last().GetHandle();
 #endif
+
 }
 
 void FGitSourceControlModule::ShutdownModule()
@@ -134,9 +139,13 @@ TSharedRef<FExtender> FGitSourceControlModule::OnExtendContentBrowserAssetSelect
 void FGitSourceControlModule::CreateGitContentBrowserAssetMenu( FMenuBuilder & menu_builder, const TArray<FAssetData> selected_assets )
 {
     menu_builder.AddMenuEntry(
-        LOCTEXT( "GitPlugin", "Diff against origin/develop" ),
-        LOCTEXT( "GitPlugin", "Diff that asset against the version on origin/develop." ),
+        LOCTEXT( "GitPlugin", "Diff Against Origin"),
+        LOCTEXT( "GitPluginTooltip", "Diff this against the version on origin"),
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
         FSlateIcon( FAppStyle::GetAppStyleSetName(), "SourceControl.Actions.Diff" ),
+#else
+        FSlateIcon(FEditorStyle::GetStyleSetName(), "SourceControl.Actions.Diff"),
+#endif
         FUIAction( FExecuteAction::CreateRaw( this, &FGitSourceControlModule::DiffAssetAgainstGitOriginDevelop, selected_assets ) ) );
 }
 
@@ -176,7 +185,7 @@ void FGitSourceControlModule::DiffAgainstOriginDevelop( UObject * InObject, cons
     {
         // Get the file name of package
         FString RelativeFileName;
-        if ( FPackageName::DoesPackageExist( InPackagePath, &RelativeFileName ) )
+        if ( FPackageName::DoesPackageExist( InPackagePath, nullptr, &RelativeFileName ) )
         {
             //if(SourceControlState->GetHistorySize() > 0)
             {
